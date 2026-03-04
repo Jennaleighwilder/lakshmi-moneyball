@@ -21,12 +21,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Dict, Optional
 
-# Paths
+# Paths — use config for portable storage (Railway volume)
+from config import DATA_DIR, LOGS_DIR, ensure_dirs
+ensure_dirs()
 HOME = Path.home()
 BOT_DIR = Path(__file__).parent.resolve()
-DATA_DIR = BOT_DIR / "data"
-LOGS_DIR = BOT_DIR / "logs"
-PORTFOLIO_FILE = BOT_DIR / "portfolio.json"
+PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 BUY_LIST_FILE = BOT_DIR / "BUY_NOW.md"
 
 # TESS data paths (try multiple locations)

@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .env
 .env.*
+data/
 state/
 logs/
 *.log

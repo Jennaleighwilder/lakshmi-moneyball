@@ -14,6 +14,9 @@ from datetime import datetime
 BOT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(BOT_DIR))
 
+from config import ensure_dirs, DATA_DIR
+ensure_dirs()
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CACHE — portfolio, live prices, Chimera
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,7 +69,7 @@ def _run_scan():
             sys.stdout = old_stdout
     except Exception:
         pass
-    pf = BOT_DIR / "portfolio.json"
+    pf = DATA_DIR / "portfolio.json"
     if pf.exists():
         with open(pf) as f:
             data = json.load(f)
@@ -162,6 +165,16 @@ def get_data(force_refresh=False):
 
     data["lakshmi"] = lakshmi_say(data)
     data["learn"] = _build_learn(data)
+
+    # Log and store for learning
+    try:
+        from lakshmi_logger import log_scan, log, get_history_count
+        log_scan(data)
+        log(f"Scan complete: {len(data.get('recommendations', []))} picks, vol={data.get('vol_regime', {}).get('signal', '?')}")
+        data["history_count"] = get_history_count()
+    except Exception as e:
+        data["history_count"] = 0
+
     return data
 
 
@@ -388,6 +401,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       html += '<div class="status-bar">';
       html += '<div class="status-item"><span>UVRK</span><span class="status-val sig-' + signal + '">' + signal + '</span> ' + volPct + '%</div>';
       html += '<div class="status-item"><span>Picks</span><span class="status-val">' + recs.length + '</span></div>';
+      html += '<div class="status-item"><span>History</span><span class="status-val">' + (data.history_count || 0) + ' scans stored</span></div>';
       html += '</div>';
 
       // Main table — database style

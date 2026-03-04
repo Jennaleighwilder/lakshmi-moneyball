@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+from config import STATE_DIR, ensure_dirs
+ensure_dirs()
 BOT_DIR = Path(__file__).parent.resolve()
-STATE_DIR = BOT_DIR / "state"
 CHIMERA_STATE = STATE_DIR / "chimera_state.json"
 
 
