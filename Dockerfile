@@ -8,5 +8,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 8080
-# Python reads PORT from env (Railway sets it at runtime)
-CMD ["python", "start.py"]
+# Shell form so $PORT expands (Railway sets it; array form would pass literal $PORT)
+CMD gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --timeout 120 app:app

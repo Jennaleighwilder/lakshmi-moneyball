@@ -4,8 +4,8 @@
     "builder": "DOCKERFILE"
   },
   "deploy": {
-    "healthcheckPath": "/",
-    "healthcheckTimeout": 90,
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
