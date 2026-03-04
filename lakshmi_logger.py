@@ -20,14 +20,18 @@ def _setup_logger():
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    fh.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except OSError:
+        pass
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    fh.setFormatter(fmt)
     ch.setFormatter(fmt)
-    logger.addHandler(fh)
     logger.addHandler(ch)
     return logger
 
@@ -68,7 +72,10 @@ def log_error(msg: str, exc: Exception = None):
 
 def get_history_count() -> int:
     """Count history entries."""
-    if not HISTORY_FILE.exists():
+    try:
+        if not HISTORY_FILE.exists():
+            return 0
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return sum(1 for _ in f)
+    except OSError:
         return 0
-    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return sum(1 for _ in f)
