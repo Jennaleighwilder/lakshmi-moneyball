@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+state/
+logs/
+*.log
+portfolio.json
+.DS_Store
