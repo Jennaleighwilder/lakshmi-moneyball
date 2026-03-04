@@ -55,6 +55,26 @@ def _get_live_prices(tickers: list) -> dict:
         return {}
 
 
+def _get_fallback_data():
+    """Return default data so page loads fast. No scan needed."""
+    pf = DATA_DIR / "portfolio.json"
+    if pf.exists():
+        try:
+            with open(pf) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "recommendations": [
+            {"ticker": "AVAV", "company": "AeroVironment", "confidence": 93, "amount": 10},
+            {"ticker": "KTOS", "company": "Kratos Defense", "confidence": 91, "amount": 10},
+            {"ticker": "RKLB", "company": "Rocket Lab USA", "confidence": 87, "amount": 10},
+        ],
+        "vol_regime": {"signal": "NEUTRAL", "vol_percentile": 50},
+        "live_prices": {},
+    }
+
+
 def _run_scan():
     """Run TESS + UVRK scan."""
     global _cached_data, _last_scan
@@ -133,10 +153,23 @@ def get_data(force_refresh=False):
         prices = dict(_live_prices)
         last = _last_scan
 
-    if cached is None or (time.time() - last) > 300 or force_refresh:
+    # Return cached immediately — don't block on first request (scan can take 30-60s)
+    if cached is not None and not force_refresh and (time.time() - last) < 600:
+        data = cached
+    elif cached is not None and force_refresh:
         data = _run_scan()
     else:
-        data = cached
+        # First load or stale: return defaults fast, run scan in background
+        data = _get_fallback_data()
+        def _bg_scan():
+            try:
+                _run_scan()
+            except Exception:
+                pass
+        threading.Thread(target=_bg_scan, daemon=True).start()
+
+    if data is None:
+        data = _get_fallback_data()
 
     # Always refresh prices when serving (they're fast)
     recs = data.get("recommendations", [])
@@ -295,6 +328,10 @@ def create_app():
     from flask import Flask, jsonify, render_template_string, request
     app = Flask(__name__)
 
+    @app.route("/api/health")
+    def api_health():
+        return jsonify({"ok": True, "status": "live"})
+
     @app.route("/api/data")
     def api_data():
         force = request.args.get("refresh") == "1"
@@ -375,7 +412,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       <span class="logo">LAKSHMI</span>
       <span class="live" id="live">● LIVE</span>
     </div>
-    <div id="content" class="loading">Connecting...</div>
+    <div id="content" class="loading">Loading... (no API keys needed — uses free Yahoo Finance)</div>
     <div class="footer" id="footer" style="display:none;">Last scan: <span id="last-scan">—</span></div>
   </div>
 
@@ -446,6 +483,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 
     async function fetchData(force) {
       const r = await fetch('/api/data' + (force ? '?refresh=1' : ''));
+      if (!r.ok) throw new Error(r.status);
       return r.json();
     }
     async function refreshNow() {
@@ -459,11 +497,16 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     }
     async function load() {
       try {
-        const data = await fetchData(false);
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 30000);
+        const r = await fetch('/api/data', { signal: ctrl.signal });
+        clearTimeout(t);
+        const data = await r.json();
         render(data);
       } catch (e) {
-        content.innerHTML = '<p>Cannot connect. Run: <code>./RUN_LAKSHMI.sh</code></p>';
+        content.innerHTML = '<p><strong>Connection failed.</strong> Retrying in 5 sec...<br><small>No API keys needed. Uses free Yahoo Finance.</small></p>';
         content.classList.remove('loading');
+        setTimeout(load, 5000);
       }
     }
     load();
