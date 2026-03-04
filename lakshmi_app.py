@@ -66,9 +66,9 @@ def _get_fallback_data():
             pass
     return {
         "recommendations": [
-            {"ticker": "AVAV", "company": "AeroVironment", "confidence": 93, "amount": 10},
-            {"ticker": "KTOS", "company": "Kratos Defense", "confidence": 91, "amount": 10},
-            {"ticker": "RKLB", "company": "Rocket Lab USA", "confidence": 87, "amount": 10},
+            {"ticker": "AVAV", "company": "AeroVironment", "confidence": 93, "amount": 10, "sector": "Defense"},
+            {"ticker": "KTOS", "company": "Kratos Defense", "confidence": 91, "amount": 10, "sector": "Defense"},
+            {"ticker": "RKLB", "company": "Rocket Lab USA", "confidence": 87, "amount": 10, "sector": "Space"},
         ],
         "vol_regime": {"signal": "NEUTRAL", "vol_percentile": 50},
         "live_prices": {},
@@ -198,6 +198,7 @@ def get_data(force_refresh=False):
 
     data["lakshmi"] = lakshmi_say(data)
     data["learn"] = _build_learn(data)
+    data["verdict"] = _get_verdict(data)
 
     # Log and store for learning
     try:
@@ -209,6 +210,17 @@ def get_data(force_refresh=False):
         data["history_count"] = 0
 
     return data
+
+
+def _get_verdict(data):
+    """One-glance verdict like Volatility Regime Dashboard."""
+    vol = data.get("vol_regime", {})
+    signal = vol.get("signal", "UNKNOWN")
+    if signal == "LOW":
+        return {"action": "BUY NOW", "why": "Vol low = cheaper. Good entry.", "color": "green"}
+    if signal == "HIGH":
+        return {"action": "WAIT", "why": "Vol high = expensive. Wait or bet half.", "color": "red"}
+    return {"action": "OK TO BUY", "why": "Vol neutral. Split your $30.", "color": "amber"}
 
 
 def _build_learn(data):
@@ -389,6 +401,17 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     .learn-term { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: #333; }
     .learn-desc { font-size: 13px; color: #555; line-height: 1.5; }
 
+    /* VERDICT CARD — one-glance like Volatility Regime Dashboard */
+    .verdict { padding: 20px 24px; margin-bottom: 20px; font-weight: 700; font-size: 1.2rem; text-align: center; border: 2px solid #333; }
+    .verdict.green { background: #e8f5e9; color: #1b5e20; }
+    .verdict.amber { background: #fff8e1; color: #e65100; }
+    .verdict.red { background: #ffebee; color: #b71c1c; }
+    .verdict-why { font-size: 0.9rem; font-weight: 500; margin-top: 6px; opacity: 0.9; }
+
+    /* BUDGET BAR */
+    .budget-bar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #e3f2fd; border: 1px solid #90caf9; margin-bottom: 16px; font-size: 13px; }
+    .budget-bar strong { color: #0d47a1; }
+
     /* STATUS BAR */
     .status-bar { display: flex; gap: 24px; margin-bottom: 16px; padding: 12px 16px; background: #fff; border: 1px solid #ccc; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
     .status-item { display: flex; align-items: center; gap: 8px; }
@@ -396,6 +419,9 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     .sig-LOW { color: #0a0; }
     .sig-NEUTRAL { color: #a60; }
     .sig-HIGH { color: #c00; }
+
+    th { cursor: pointer; user-select: none; }
+    th:hover { background: #eee; }
 
     .refresh-btn { margin-top: 16px; padding: 10px 20px; background: #333; color: #fff; border: none; font-weight: 600; cursor: pointer; font-size: 13px; }
     .refresh-btn:hover { background: #555; }
@@ -430,37 +456,71 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       const signal = vol.signal || 'UNKNOWN';
       const volPct = vol.vol_percentile ?? 50;
       const learn = data.learn || {};
+      const verdict = data.verdict || { action: 'OK', why: '', color: 'amber' };
+      const budget = 30;
 
       content.classList.remove('loading');
       let html = '';
+
+      // VERDICT CARD — one-glance (like Volatility Regime Dashboard)
+      html += '<div class="verdict ' + (verdict.color || 'amber') + '">';
+      html += '<div>' + esc(verdict.action || 'OK TO BUY') + '</div>';
+      html += '<div class="verdict-why">' + esc(verdict.why || '') + '</div>';
+      html += '</div>';
+
+      // BUDGET BAR (like StockScan AI)
+      html += '<div class="budget-bar">';
+      html += '<span><strong>$' + budget + '</strong> budget → <strong>$' + (recs.length ? (budget/recs.length).toFixed(0) : 10) + '</strong> per pick</span>';
+      html += '<span>Hold: 6–12 months</span>';
+      html += '</div>';
 
       // Status bar
       html += '<div class="status-bar">';
       html += '<div class="status-item"><span>UVRK</span><span class="status-val sig-' + signal + '">' + signal + '</span> ' + volPct + '%</div>';
       html += '<div class="status-item"><span>Picks</span><span class="status-val">' + recs.length + '</span></div>';
-      html += '<div class="status-item"><span>History</span><span class="status-val">' + (data.history_count || 0) + ' scans stored</span></div>';
+      html += '<div class="status-item"><span>History</span><span class="status-val">' + (data.history_count || 0) + ' scans</span></div>';
       html += '</div>';
 
-      // Main table — database style
-      html += '<div class="table-wrap"><table><thead><tr>';
-      html += '<th>TICKER</th><th>COMPANY</th><th>PRICE</th><th>AMOUNT</th><th>TESS</th><th>WHY</th>';
+      // Main table — sortable, more columns (like InsideArbitrage)
+      html += '<div class="table-wrap"><table id="picks-table"><thead><tr>';
+      html += '<th data-sort="ticker">TICKER</th><th data-sort="company">COMPANY</th><th data-sort="sector">SECTOR</th>';
+      html += '<th data-sort="price">PRICE</th><th>AMOUNT</th><th data-sort="shares">SHARES</th><th data-sort="tess">TESS</th><th>HOLD</th><th class="col-why">WHY</th>';
       html += '</tr></thead><tbody>';
+      const rows = [];
       for (let i = 0; i < recs.length; i++) {
         const r = recs[i];
         const p = prices[r.ticker];
-        const priceStr = (p != null && typeof p === 'number') ? '$' + p.toFixed(2) : '—';
+        const price = (p != null && typeof p === 'number') ? p : 0;
+        const priceStr = price ? '$' + price.toFixed(2) : '—';
+        const amt = r.amount || 10;
+        const shares = price > 0 ? (amt / price).toFixed(2) : '—';
         const pickLearn = (learn.picks || [])[i] || {};
-        const why = pickLearn.why || 'TESS ' + (r.confidence || 0) + '% = M&A target. $10 = your split.';
+        const why = pickLearn.why || 'TESS ' + (r.confidence || 0) + '% = M&A target.';
+        rows.push({ r, priceStr, price, amt, shares, why, sector: r.sector || '—' });
+      }
+      rows.sort((a,b) => (b.r.confidence || 0) - (a.r.confidence || 0));
+      for (const row of rows) {
+        const r = row.r;
         html += '<tr>';
         html += '<td>' + esc(r.ticker) + '</td>';
         html += '<td>' + esc(r.company) + '</td>';
-        html += '<td>' + priceStr + '</td>';
-        html += '<td>$' + (r.amount || 10) + '</td>';
+        html += '<td>' + esc(row.sector) + '</td>';
+        html += '<td>' + row.priceStr + '</td>';
+        html += '<td>$' + row.amt + '</td>';
+        html += '<td>' + row.shares + '</td>';
         html += '<td>' + (r.confidence || 0) + '%</td>';
-        html += '<td class="col-why">' + esc(why) + '</td>';
+        html += '<td>6–12 mo</td>';
+        html += '<td class="col-why">' + esc(row.why) + '</td>';
         html += '</tr>';
       }
       html += '</tbody></table></div>';
+
+      // ACTION ROW
+      if (recs.length) {
+        html += '<div class="budget-bar" style="margin-top:16px;background:#e8f5e9;border-color:#81c784">';
+        html += '<strong>Next:</strong> Open Robinhood or Webull → Search ' + esc(recs[0].ticker) + ' → Buy $' + (recs[0].amount || 10);
+        html += '</div>';
+      }
 
       // LEARN — understand what you're doing
       html += '<div class="learn"><h3>LEARN — Understand what you\'re doing and why</h3>';
@@ -511,6 +571,31 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     }
     load();
     setInterval(load, 45000);
+
+    document.addEventListener('click', function(e) {
+      const th = e.target.closest('th[data-sort]');
+      if (!th) return;
+      const table = document.getElementById('picks-table');
+      if (!table) return;
+      const tbody = table.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const col = th.dataset.sort;
+      const colIdx = { ticker:0, company:1, sector:2, price:3, shares:5, tess:6 }[col];
+      if (colIdx == null) return;
+      const dir = th.dataset.dir === 'asc' ? -1 : 1;
+      th.dataset.dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+      rows.sort((a, b) => {
+        let va = a.cells[colIdx]?.textContent?.trim() || '';
+        let vb = b.cells[colIdx]?.textContent?.trim() || '';
+        if (col === 'tess' || col === 'price' || col === 'shares') {
+          va = parseFloat(va.replace(/[^0-9.-]/g,'')) || 0;
+          vb = parseFloat(vb.replace(/[^0-9.-]/g,'')) || 0;
+          return dir * (vb - va);
+        }
+        return dir * String(va).localeCompare(vb);
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
   </script>
 </body>
 </html>'''

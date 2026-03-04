@@ -377,7 +377,7 @@ def run_bot(background: bool = False):
     portfolio = load_portfolio()
     portfolio["last_run"] = datetime.now().isoformat()
     portfolio["recommendations"] = [
-        {"ticker": r["ticker"], "company": r["company"], "confidence": r["confidence"], "amount": per_pick}
+        {"ticker": r["ticker"], "company": r["company"], "confidence": r["confidence"], "amount": per_pick, "sector": r.get("sector", "")}
         for r in recommendations[:3]
     ]
     portfolio["vol_regime"] = vol_regime
