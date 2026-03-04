@@ -15,6 +15,9 @@ HISTORY_FILE = DATA_DIR / "history.jsonl"  # append-only, one JSON object per li
 DOMAIN_HISTORY_FILE = DATA_DIR / "domain_history.jsonl"  # all 12 domains, for learning
 
 def ensure_dirs():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # Read-only fs (e.g. some Railway setups)
