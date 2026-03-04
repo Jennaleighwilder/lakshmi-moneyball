@@ -12,6 +12,7 @@ DATA_DIR = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", str(BOT_DIR / "data"
 LOGS_DIR = DATA_DIR / "logs"
 STATE_DIR = DATA_DIR / "state"
 HISTORY_FILE = DATA_DIR / "history.jsonl"  # append-only, one JSON object per line
+DOMAIN_HISTORY_FILE = DATA_DIR / "domain_history.jsonl"  # all 12 domains, for learning
 
 def ensure_dirs():
     DATA_DIR.mkdir(parents=True, exist_ok=True)

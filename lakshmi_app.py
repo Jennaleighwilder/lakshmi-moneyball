@@ -30,28 +30,35 @@ _chimera_engine = None
 
 
 def _get_live_prices(tickers: list) -> dict:
-    """Fetch real-time prices from Yahoo Finance."""
+    """Fetch real-time prices from Yahoo Finance. 8s timeout so we never hang."""
     if not tickers:
         return {}
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    def _fetch():
+        try:
+            import yfinance as yf
+            prices = {}
+            for t in tickers:
+                try:
+                    data = yf.download(t, period="5d", progress=False, threads=False, group_by="ticker")
+                    if data is not None and len(data) > 0:
+                        if hasattr(data.columns, "nlevels") and data.columns.nlevels > 1:
+                            close = data["Adj Close"].iloc[:, 0] if "Adj Close" in data.columns else data["Close"].iloc[:, 0]
+                        else:
+                            close = data["Adj Close"] if "Adj Close" in data.columns else data["Close"]
+                        val = close.iloc[-1]
+                        if hasattr(val, "iloc"):
+                            val = val.iloc[0]
+                        prices[t] = float(val)
+                except Exception:
+                    pass
+            return prices
+        except Exception:
+            return {}
     try:
-        import yfinance as yf
-        prices = {}
-        for t in tickers:
-            try:
-                data = yf.download(t, period="5d", progress=False, threads=False, group_by="ticker")
-                if data is not None and len(data) > 0:
-                    if hasattr(data.columns, "nlevels") and data.columns.nlevels > 1:
-                        close = data["Adj Close"].iloc[:, 0] if "Adj Close" in data.columns else data["Close"].iloc[:, 0]
-                    else:
-                        close = data["Adj Close"] if "Adj Close" in data.columns else data["Close"]
-                    val = close.iloc[-1]
-                    if hasattr(val, "iloc"):
-                        val = val.iloc[0]
-                    prices[t] = float(val)
-            except Exception:
-                pass
-        return prices
-    except Exception:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_fetch).result(timeout=8)
+    except FuturesTimeout:
         return {}
 
 
@@ -115,10 +122,29 @@ def _refresh_prices():
             _last_prices = time.time()
 
 
-def _refresh_loop(scan_interval=120, price_interval=45):
-    """Background: scan every 2 min, prices every 45 sec."""
+_domain_scan_cache = None
+_domain_scan_time = 0.0
+
+
+def _run_domain_scan():
+    """Scan all 12 domains — prediction, stocks, crypto, etc. Store for learning."""
+    global _domain_scan_cache, _domain_scan_time
+    try:
+        from domains.scanner import scan_all, append_to_domain_history
+        from config import DOMAIN_HISTORY_FILE
+        result = scan_all()
+        append_to_domain_history(result, DOMAIN_HISTORY_FILE)
+        _domain_scan_cache = result
+        _domain_scan_time = time.time()
+    except Exception:
+        pass
+
+
+def _refresh_loop(scan_interval=120, price_interval=45, domain_interval=300):
+    """Background: scan every 2 min, prices every 45 sec, 12 domains every 5 min."""
     last_scan = 0
     last_prices = 0
+    last_domain = 0
     while True:
         try:
             now = time.time()
@@ -128,9 +154,31 @@ def _refresh_loop(scan_interval=120, price_interval=45):
             if now - last_prices >= price_interval:
                 _refresh_prices()
                 last_prices = now
+            if now - last_domain >= domain_interval:
+                _run_domain_scan()
+                last_domain = now
         except Exception:
             pass
         time.sleep(15)
+
+
+def get_data_quick():
+    """Instant response — no Yahoo, no Chimera, no domain scan. Use for first paint."""
+    data = _get_fallback_data()
+    data["live_prices"] = {}
+    data["chimera"] = {"status": "unavailable", "insights": []}
+    data["chimera_status"] = {}
+    data["lakshmi"] = lakshmi_say(data)
+    data["learn"] = _build_learn(data)
+    data["verdict"] = _get_verdict(data)
+    data["domains"] = {"domains": {}, "total_opportunities": 0}
+    data["last_refresh"] = datetime.now().isoformat()
+    try:
+        from lakshmi_logger import get_history_count
+        data["history_count"] = get_history_count()
+    except Exception:
+        data["history_count"] = 0
+    return data
 
 
 def get_chimera():
@@ -181,24 +229,42 @@ def get_data(force_refresh=False):
 
     data["live_prices"] = prices
 
-    # Chimera analysis
-    chimera = get_chimera()
-    if chimera:
-        try:
-            analysis = __import__("chimera_moneyball").analyze_portfolio(chimera, data, prices)
-            data["chimera"] = analysis
-            data["chimera_status"] = chimera.get_status()
-            __import__("chimera_moneyball").save_chimera_state(chimera)
-        except Exception as e:
-            data["chimera"] = {"status": "error", "error": str(e), "insights": []}
-            data["chimera_status"] = {}
-    else:
-        data["chimera"] = {"status": "unavailable", "insights": []}
-        data["chimera_status"] = {}
+    # Chimera analysis — 5s timeout, never block
+    try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        def _chimera_work():
+            chimera = get_chimera()
+            if chimera:
+                analysis = __import__("chimera_moneyball").analyze_portfolio(chimera, data, prices)
+                data["chimera"] = analysis
+                data["chimera_status"] = chimera.get_status()
+                __import__("chimera_moneyball").save_chimera_state(chimera)
+            else:
+                data["chimera"] = {"status": "unavailable", "insights": []}
+                data["chimera_status"] = {}
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(_chimera_work).result(timeout=5)
+    except Exception:
+        data["chimera"] = data.get("chimera") or {"status": "unavailable", "insights": []}
+        data["chimera_status"] = data.get("chimera_status") or {}
 
     data["lakshmi"] = lakshmi_say(data)
     data["learn"] = _build_learn(data)
     data["verdict"] = _get_verdict(data)
+
+    # 12 domains — run in background, never block. First load returns empty; next refresh has data.
+    try:
+        global _domain_scan_cache, _domain_scan_time
+        if _domain_scan_cache is None or (time.time() - _domain_scan_time) > 600:
+            def _bg_domain():
+                try:
+                    _run_domain_scan()
+                except Exception:
+                    pass
+            threading.Thread(target=_bg_domain, daemon=True).start()
+        data["domains"] = _domain_scan_cache or {"domains": {}, "total_opportunities": 0}
+    except Exception:
+        data["domains"] = {"domains": {}, "total_opportunities": 0}
 
     # Log and store for learning
     try:
@@ -344,6 +410,11 @@ def create_app():
     def api_health():
         return jsonify({"ok": True, "status": "live"})
 
+    @app.route("/api/quick")
+    def api_quick():
+        """Instant load — no Yahoo, no external APIs. Page shows immediately."""
+        return jsonify(get_data_quick())
+
     @app.route("/api/data")
     def api_data():
         force = request.args.get("refresh") == "1"
@@ -427,6 +498,8 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     .refresh-btn:hover { background: #555; }
     .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .footer { margin-top: 24px; font-size: 12px; color: #666; }
+    .domain-on { color: #1b5e20; }
+    .domain-off { color: #999; }
     .loading { text-align: center; padding: 48px; color: #666; }
     .loading::after { content: ''; display: inline-block; width: 18px; height: 18px; border: 2px solid #333; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 8px; vertical-align: middle; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -480,6 +553,21 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
       html += '<div class="status-item"><span>Picks</span><span class="status-val">' + recs.length + '</span></div>';
       html += '<div class="status-item"><span>History</span><span class="status-val">' + (data.history_count || 0) + ' scans</span></div>';
       html += '</div>';
+
+      // 12 DOMAINS — constantly scanning, model learns, eventually branches
+      const domains = data.domains || {};
+      const domData = domains.domains || {};
+      const totalOpps = domains.total_opportunities || 0;
+      const domainNames = ['prediction','sports','dfs','esports','stocks','crypto','insurance','casino','horses','sweeps','derivatives','unusual'];
+      html += '<div class="learn" style="margin-top:16px"><h3>12 DOMAINS — Scanning constantly (model learns)</h3>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">';
+      for (const d of domainNames) {
+        const info = domData[d] || {};
+        const count = info.count || 0;
+        const cls = count > 0 ? 'domain-on' : 'domain-off';
+        html += '<span class="' + cls + '" style="padding:4px 10px;font-size:11px;border-radius:4px;background:' + (count > 0 ? '#e8f5e9' : '#f5f5f5') + '">' + d + ': ' + count + '</span>';
+      }
+      html += '</div><p style="margin-top:10px;font-size:12px;color:#666">Total: ' + totalOpps + ' opportunities across domains. Stored in history for learning. Branching soon.</p></div>';
 
       // Main table — sortable, more columns (like InsideArbitrage)
       html += '<div class="table-wrap"><table id="picks-table"><thead><tr>';
@@ -557,16 +645,29 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
     }
     async function load() {
       try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 30000);
-        const r = await fetch('/api/data', { signal: ctrl.signal });
-        clearTimeout(t);
-        const data = await r.json();
-        render(data);
+        // 1. Quick load first — instant, no Yahoo. Page shows immediately.
+        const quickR = await fetch('/api/quick');
+        if (quickR.ok) {
+          const quickData = await quickR.json();
+          render(quickData);
+          content.classList.remove('loading');
+        } else {
+          throw new Error('Quick load failed');
+        }
+        // 2. Full data in background — Yahoo prices, Chimera, domains. Updates when ready.
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 90000);
+          const r = await fetch('/api/data', { signal: ctrl.signal });
+          clearTimeout(t);
+          if (r.ok) {
+            const data = await r.json();
+            render(data);
+          }
+        } catch (_) { /* full load failed, keep quick data */ }
       } catch (e) {
-        content.innerHTML = '<p><strong>Connection failed.</strong> Retrying in 5 sec...<br><small>No API keys needed. Uses free Yahoo Finance.</small></p>';
+        content.innerHTML = '<p><strong>Connection failed.</strong> <button onclick="load()" style="margin-top:8px;padding:8px 16px;cursor:pointer">Retry</button><br><small>No API keys needed. Uses free Yahoo Finance.</small></p>';
         content.classList.remove('loading');
-        setTimeout(load, 5000);
       }
     }
     load();
