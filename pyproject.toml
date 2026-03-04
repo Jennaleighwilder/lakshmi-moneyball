@@ -1,0 +1,13 @@
+[project]
+name = "lakshmi-moneyball"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+    "gunicorn>=21.0.0",
+    "yfinance>=0.2.0",
+    "pandas>=2.0.0",
+]
+
+[project.scripts]
+app = "app:app"
