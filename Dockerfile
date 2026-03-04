@@ -6,8 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN chmod +x start.sh
 
 EXPOSE 8080
-# Railway sets PORT (usually 8080)
-CMD ["sh", "./start.sh"]
+# Python reads PORT from env (Railway sets it at runtime)
+CMD ["python", "start.py"]
